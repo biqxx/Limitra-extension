@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Limitra Product Sourcer</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>Limitra Sourcer</h1>
+        <p id="auth-status" class="muted">Not signed in</p>
+      </div>
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="queue">Review <span id="queue-badge">0</span></button>
+        <button class="tab-btn" data-tab="history">Published</button>
+        <button class="tab-btn" data-tab="logs">Logs <span id="logs-badge">0</span></button>
+        <button class="tab-btn" data-tab="settings">Account</button>
+      </div>
+    </header>
+
+    <main>
+      <section id="tab-queue" class="tab-panel active">
+        <div class="toolbar" style="flex-wrap: wrap">
+          <button id="btn-scan-tab" class="btn btn-secondary">Scan Page</button>
+          <button id="btn-bulk-scan" class="btn btn-secondary">Add All on Page</button>
+          <button id="btn-ai-all" class="btn btn-secondary">Run AI on All</button>
+        </div>
+        <div id="bulk-bar" class="toolbar hidden" style="flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px">
+          <label style="flex-direction: row; align-items: center; gap: 6px; margin-right: auto">
+            <input id="chk-select-all" type="checkbox" style="width: auto" />
+            Select All (<span id="selected-count">0</span>)
+          </label>
+          <button id="btn-bulk-publish" class="btn btn-success">Publish Selected</button>
+          <button id="btn-bulk-draft" class="btn btn-secondary">Draft Selected</button>
+          <button id="btn-bulk-remove" class="btn btn-danger">Remove</button>
+        </div>
+        <p id="bulk-status" class="muted" style="margin-bottom: 8px"></p>
+        <div id="queue-list" class="stack"></div>
+        <div id="editor-view" class="hidden"></div>
+      </section>
+
+      <section id="tab-history" class="tab-panel">
+        <div id="history-list" class="stack"></div>
+      </section>
+
+      <section id="tab-logs" class="tab-panel">
+        <div class="toolbar">
+          <button id="btn-copy-logs" class="btn btn-secondary">Copy Logs</button>
+          <button id="btn-clear-logs" class="btn btn-danger">Clear Logs</button>
+        </div>
+        <div id="logs-list" class="stack"></div>
+      </section>
+
+      <section id="tab-settings" class="tab-panel">
+        <form id="login-form" class="card stack">
+          <h2>Limitra Admin Sign In</h2>
+          <label>
+            API Base URL
+            <input id="api-url" type="url" value="https://api.limitra.com.ng/api/v1" required />
+          </label>
+          <label>
+            Email
+            <input id="login-email" type="email" placeholder="admin@limitra.com.ng" required />
+          </label>
+          <label>
+            Password
+            <input id="login-password" type="password" required />
+          </label>
+          <button type="submit" class="btn btn-primary">Sign In</button>
+          <p id="login-msg" class="muted"></p>
+        </form>
+        <button id="btn-logout" class="btn btn-danger hidden">Sign Out</button>
+
+        <form id="proxy-form" class="card stack" style="margin-top: 12px">
+          <h2>Target Site Proxy (Amazon / eBay / Walmart)</h2>
+          <p class="muted" id="proxy-status">Direct connection (no proxy)</p>
+          <label style="flex-direction: row; align-items: center; gap: 8px">
+            <input id="proxy-enabled" type="checkbox" style="width: auto" />
+            Route target supplier requests through proxy
+          </label>
+          <div style="display: grid; grid-template-columns: 110px 1fr 80px; gap: 6px">
+            <label>
+              Type
+              <select id="proxy-scheme">
+                <option value="HTTP">HTTP</option>
+                <option value="HTTPS">HTTPS</option>
+                <option value="SOCKS5">SOCKS5</option>
+              </select>
+            </label>
+            <label>
+              Host / IP
+              <input id="proxy-host" type="text" placeholder="proxy.example.com" />
+            </label>
+            <label>
+              Port
+              <input id="proxy-port" type="number" min="1" max="65535" placeholder="8080" />
+            </label>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px">
+            <label>
+              Username (optional)
+              <input id="proxy-user" type="text" autocomplete="off" />
+            </label>
+            <label>
+              Password (optional)
+              <input id="proxy-pass" type="password" autocomplete="off" />
+            </label>
+          </div>
+          <button type="submit" class="btn btn-primary">Save Proxy Settings</button>
+        </form>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
+
