@@ -95,7 +95,7 @@
     return null;
   }
 
-  function extractTwisterVariants(doc, basePrice, currency, baseImages) {
+  function extractTwisterVariants(doc, basePrice, currency, baseImages, currentAsin = null) {
     const scripts = Array.from(doc.querySelectorAll('script'));
     let dimensionValues = null;
     let asinVariationValues = null;
@@ -120,8 +120,9 @@
       }
     }
 
-    // Fallback DOM map of color swatch thumbnails
+    // Fallback DOM map of color swatch thumbnails and per-ASIN swatch prices
     const swatchColorMap = {};
+    const swatchPriceMap = {};
     doc.querySelectorAll('#variation_color_name li, #twister [id*="color"] li').forEach((li) => {
       const img = li.querySelector('img');
       const colorName = cleanText(
@@ -135,9 +136,21 @@
       }
     });
 
+    doc.querySelectorAll('#twister li[data-defaultasin], #twister li[data-asin], [id^="inline-twister-row-"] li[data-asin]').forEach((li) => {
+      const swatchAsin = (li.getAttribute('data-defaultasin') || li.getAttribute('data-asin') || '').trim().toUpperCase();
+      if (!swatchAsin) return;
+      const priceTxt =
+        li.querySelector('.a-price .a-offscreen, .twisterSwatchPrice, .slot-price span')?.textContent || '';
+      const parsedPrice = parsePrice(priceTxt);
+      if (parsedPrice != null && parsedPrice > 0) {
+        swatchPriceMap[swatchAsin] = parsedPrice;
+      }
+    });
+
     const variants = [];
     const dimKeys = variationDisplayLabels ? Object.keys(variationDisplayLabels) : [];
     const dimNames = dimKeys.map((k) => variationDisplayLabels[k] || k);
+    const activeAsin = currentAsin || extractAsin(doc.location?.href || '');
 
     if (dimensionValues && typeof dimensionValues === 'object') {
       for (const [asin, values] of Object.entries(dimensionValues)) {
@@ -166,19 +179,23 @@
           variantImgs = swatchColorMap[String(colorVal).toLowerCase()] || [];
         }
 
+        const upperAsin = String(asin).toUpperCase();
+        const ownSwatchPrice = swatchPriceMap[upperAsin] ?? (upperAsin === activeAsin ? basePrice : null);
+        const resolvedVariantPrice = ownSwatchPrice ?? basePrice ?? null;
+
         variants.push({
           id: asin,
           sku: asin,
           label: Object.keys(selectedOptions).join(' / ') || 'Variant',
           value: Object.values(selectedOptions).join(' / '),
           selected_options: selectedOptions,
-          price: asin === extractAsin(doc.location?.href || '') ? basePrice : null,
+          price: resolvedVariantPrice,
           original_price: null,
           currency,
           available: true,
           stock: null,
           images: variantImgs.length ? variantImgs : baseImages.slice(0, 1),
-          needs_price_fetch: asin !== extractAsin(doc.location?.href || ''),
+          needs_price_fetch: Boolean(upperAsin !== activeAsin && ownSwatchPrice == null),
         });
       }
     }
@@ -200,19 +217,20 @@
           );
           if (!val || /select/i.test(val)) continue;
           const itemPriceText = item.querySelector('.a-price .a-offscreen, .twisterSwatchPrice')?.textContent;
+          const parsedItemPrice = parsePrice(itemPriceText);
           variants.push({
             id: asin || `${label}-${val}`,
             sku: asin || null,
             label,
             value: val,
             selected_options: { [label]: val },
-            price: parsePrice(itemPriceText) ?? null,
+            price: parsedItemPrice ?? basePrice ?? null,
             original_price: null,
             currency,
             available: !item.classList.contains('swatchUnavailable'),
             stock: null,
-            images: [],
-            needs_price_fetch: Boolean(asin && !parsePrice(itemPriceText)),
+            images: baseImages.slice(0, 1),
+            needs_price_fetch: Boolean(asin && !parsedItemPrice),
           });
         }
       }
@@ -388,7 +406,7 @@
     const reviewText = cleanText(doc.querySelector('#acrCustomerReviewText')?.textContent || '');
     const reviewMatch = reviewText.replace(/,/g, '').match(/(\d+)/);
 
-    const variants = extractTwisterVariants(doc, price, currency, images);
+    const variants = extractTwisterVariants(doc, price, currency, images, asin);
 
     return {
       source: 'amazon',

@@ -77,12 +77,103 @@ chrome.webRequest?.onAuthRequired?.addListener(
 );
 
 async function getConfig() {
-  const res = await chrome.storage.local.get(['apiBaseUrl', 'token', 'user']);
+  const res = await chrome.storage.local.get([
+    'apiBaseUrl',
+    'token',
+    'user',
+    'authCredentials',
+  ]);
   return {
     apiBaseUrl: (res.apiBaseUrl || DEFAULT_API_BASE).replace(/\/+$/, ''),
     token: res.token || null,
     user: res.user || null,
+    authCredentials: res.authCredentials || null,
   };
+}
+
+function getJwtExpMs(token) {
+  if (!token || typeof token !== 'string') return null;
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const json = JSON.parse(atob(base64));
+    return typeof json?.exp === 'number' ? json.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+let refreshPromise = null;
+
+async function refreshOrRelogin(apiBaseUrl, currentToken, authCredentials, forceRelogin = false) {
+  if (refreshPromise) return refreshPromise;
+
+  refreshPromise = (async () => {
+    // 1. Try JWT /refresh if we have a token and aren't forced directly to relogin
+    if (currentToken && !forceRelogin) {
+      try {
+        const res = await fetch(`${apiBaseUrl}/refresh`, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${currentToken}`,
+          },
+        });
+        const json = await res.json().catch(() => null);
+        const refreshedData = json?.data ?? json;
+        const newToken = refreshedData?.access_token || refreshedData?.token;
+        if (res.ok && newToken) {
+          await chrome.storage.local.set({
+            token: newToken,
+            user: refreshedData?.user || undefined,
+            authExpired: false,
+          });
+          return newToken;
+        }
+      } catch {
+        // fall through to credential re-login
+      }
+    }
+
+    // 2. Fall back to automatic re-login if credentials were saved locally
+    if (authCredentials?.email && authCredentials?.password) {
+      try {
+        const res = await fetch(`${apiBaseUrl}/login`, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            email: authCredentials.email,
+            password: authCredentials.password,
+          }),
+        });
+        const json = await res.json().catch(() => null);
+        const loginData = json?.data ?? json;
+        const newToken = loginData?.access_token || loginData?.token;
+        if (res.ok && newToken) {
+          await chrome.storage.local.set({
+            token: newToken,
+            user: loginData?.user || undefined,
+            authExpired: false,
+          });
+          await appendLog('info', 'auth', 'Automatically refreshed expired session token.');
+          return newToken;
+        }
+      } catch {
+        // ignore and return null below
+      }
+    }
+
+    return null;
+  })().finally(() => {
+    refreshPromise = null;
+  });
+
+  return refreshPromise;
 }
 
 async function appendLog(level, scope, message, details = null) {
@@ -104,21 +195,62 @@ async function appendLog(level, scope, message, details = null) {
 }
 
 async function apiRequest(path, { method = 'GET', body, auth = true } = {}) {
-  const { apiBaseUrl, token } = await getConfig();
-  const headers = {
-    Accept: 'application/json',
-    'Content-Type': 'application/json',
-  };
-  if (auth && token) {
-    headers.Authorization = `Bearer ${token}`;
+  const { apiBaseUrl, token: storedToken, authCredentials } = await getConfig();
+  let activeToken = storedToken;
+
+  // Proactively refresh or re-login if the JWT is expired or within 5 minutes of expiring
+  if (auth && activeToken) {
+    const expMs = getJwtExpMs(activeToken);
+    if (expMs !== null) {
+      const remainingMs = expMs - Date.now();
+      if (remainingMs <= 0) {
+        const renewed = await refreshOrRelogin(apiBaseUrl, activeToken, authCredentials, false);
+        if (renewed) activeToken = renewed;
+      } else if (remainingMs < 5 * 60 * 1000) {
+        const renewed = await refreshOrRelogin(apiBaseUrl, activeToken, authCredentials, false);
+        if (renewed) activeToken = renewed;
+      }
+    }
+  } else if (auth && !activeToken && authCredentials?.email && authCredentials?.password) {
+    const renewed = await refreshOrRelogin(apiBaseUrl, null, authCredentials, true);
+    if (renewed) activeToken = renewed;
   }
 
+  const buildHeaders = (jwt) => {
+    const h = {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    };
+    if (auth && jwt) {
+      h.Authorization = `Bearer ${jwt}`;
+    }
+    return h;
+  };
+
   const url = `${apiBaseUrl}${path.startsWith('/') ? path : `/${path}`}`;
-  const res = await fetch(url, {
+  let res = await fetch(url, {
     method,
-    headers,
+    headers: buildHeaders(activeToken),
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
+
+  // On 401 Unauthenticated, attempt token refresh / auto-relogin once and retry the request
+  if (auth && res.status === 401) {
+    const renewed = await refreshOrRelogin(apiBaseUrl, activeToken, authCredentials, false);
+    if (renewed) {
+      activeToken = renewed;
+      res = await fetch(url, {
+        method,
+        headers: buildHeaders(activeToken),
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+    } else {
+      await chrome.storage.local.set({ token: null, authExpired: true });
+      const expiredMsg = 'Session expired (JWT valid for 60 mins). Please sign in again on the Account tab.';
+      await appendLog('error', `api:${path}`, expiredMsg, { status: 401, url });
+      throw new Error(expiredMsg);
+    }
+  }
 
   const json = await res.json().catch(() => null);
   if (!res.ok || (json && json.success === false)) {
@@ -169,8 +301,8 @@ async function runAiReviewOnItem(itemId) {
   if (idx === -1) return null;
 
   const item = queue[idx];
-  const { token } = await getConfig();
-  if (!token) return item;
+  const { token, authCredentials } = await getConfig();
+  if (!token && !(authCredentials?.email && authCredentials?.password)) return item;
 
   queue[idx] = { ...item, review_status: 'reviewing', review_error: null };
   await chrome.storage.local.set({ reviewQueue: queue });
@@ -330,8 +462,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         });
         const token = data?.access_token || data?.token;
         if (!token) throw new Error('No access token returned.');
-        await chrome.storage.local.set({ token, user: data?.user || null });
+        await chrome.storage.local.set({
+          token,
+          user: data?.user || null,
+          authExpired: false,
+          authCredentials: { email: msg.email, password: msg.password },
+        });
         sendResponse({ ok: true, user: data?.user || null });
+
+        // Automatically retry any queued products that previously failed due to expired auth
+        const { reviewQueue = [] } = await chrome.storage.local.get(['reviewQueue']);
+        for (const item of reviewQueue) {
+          if (
+            item.review_status === 'pending' ||
+            (item.review_status === 'error' && /unauthenticated|session expired/i.test(item.review_error || ''))
+          ) {
+            runAiReviewOnItem(item.queue_id).catch(() => {});
+          }
+        }
       } catch (err) {
         sendResponse({ ok: false, error: err.message });
       }

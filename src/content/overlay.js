@@ -275,7 +275,7 @@
 
         for (let i = 0; i < updated.length; i += 1) {
           const v = updated[i];
-          if (v.price != null && Number(v.price) > 0) {
+          if (v.price != null && Number(v.price) > 0 && !v.needs_price_fetch) {
             continue;
           }
           if (!v.id || adapter.name !== 'amazon') {

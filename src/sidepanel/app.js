@@ -27,11 +27,26 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
   btn.addEventListener('click', () => switchTab(btn.dataset.tab));
 });
 
+function isJwtExpired(token) {
+  if (!token || typeof token !== 'string') return true;
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return false;
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const payload = JSON.parse(atob(base64));
+    return typeof payload?.exp === 'number' && payload.exp * 1000 <= Date.now();
+  } catch {
+    return false;
+  }
+}
+
 async function loadState() {
   const state = await chrome.storage.local.get([
     'apiBaseUrl',
     'token',
     'user',
+    'authExpired',
+    'authCredentials',
     'reviewQueue',
     'publishedHistory',
     'proxyConfig',
@@ -53,14 +68,28 @@ async function loadState() {
 
   if (state.apiBaseUrl) $('api-url').value = state.apiBaseUrl;
   const user = state.user;
-  if (state.token && user) {
+  if (user?.email && !$('login-email').value) {
+    $('login-email').value = user.email;
+  }
+
+  const hasAutoRenew = Boolean(state.authCredentials?.email && state.authCredentials?.password);
+  const tokenExpired = state.token ? isJwtExpired(state.token) : true;
+
+  if (state.token && (!tokenExpired || hasAutoRenew) && user) {
     $('auth-status').textContent = `Signed in as ${user.email || user.name}`;
+    $('auth-status').style.color = '';
     $('btn-logout').classList.remove('hidden');
-  } else if (state.token) {
+  } else if (state.token && (!tokenExpired || hasAutoRenew)) {
     $('auth-status').textContent = 'Signed in';
+    $('auth-status').style.color = '';
+    $('btn-logout').classList.remove('hidden');
+  } else if (state.authExpired || (state.token && tokenExpired && !hasAutoRenew)) {
+    $('auth-status').textContent = `Session expired${user?.email ? ` (${user.email})` : ''} — sign in on Account tab`;
+    $('auth-status').style.color = '#f87171';
     $('btn-logout').classList.remove('hidden');
   } else {
     $('auth-status').textContent = 'Not signed in — open Account tab';
+    $('auth-status').style.color = '';
     $('btn-logout').classList.add('hidden');
   }
 
@@ -214,8 +243,8 @@ function renderEditor(item) {
           <strong>${escapeHtml(v.value || Object.values(v.selected_options || {}).join(' / '))}</strong>
           <div class="muted">${escapeHtml(v.sku || v.id || '')} · ${(v.images || []).length} img(s)</div>
         </div>
-        <input type="number" step="0.01" class="var-price" data-idx="${idx}" value="${v.price ?? ''}" placeholder="Price" />
-        <div class="muted">${v.proposed_price_ngn ? `₦${Number(v.proposed_price_ngn).toLocaleString()}` : '—'}</div>
+        <input type="number" step="0.01" class="var-price" data-idx="${idx}" value="${v.price ?? item.price ?? ''}" placeholder="Price" />
+        <div class="muted">${v.proposed_price_ngn ? `₦${Number(v.proposed_price_ngn).toLocaleString()}` : (item.quote?.proposed_price_ngn ? `₦${Number(item.quote.proposed_price_ngn).toLocaleString()}` : '—')}</div>
       </div>`
     )
     .join('');
@@ -390,6 +419,7 @@ function renderEditor(item) {
       return;
     }
 
+    const defaultProductPrice = Number($('ed-price').value) || item.price;
     const keptVariants = [];
     document.querySelectorAll('.var-keep').forEach((chk) => {
       if (!chk.checked) return;
@@ -397,9 +427,13 @@ function renderEditor(item) {
       const baseVar = item.variants[idx];
       const priceInput = document.querySelector(`.var-price[data-idx="${idx}"]`);
       const editedPrice = Number(priceInput?.value);
+      const fallbackVarPrice =
+        baseVar.price != null && Number(baseVar.price) > 0
+          ? Number(baseVar.price)
+          : defaultProductPrice;
       keptVariants.push({
         ...baseVar,
-        price: Number.isFinite(editedPrice) && editedPrice > 0 ? editedPrice : baseVar.price,
+        price: Number.isFinite(editedPrice) && editedPrice > 0 ? editedPrice : fallbackVarPrice,
       });
     });
 
@@ -596,7 +630,10 @@ async function runBulkImport(publish) {
           image_url: item.image_url,
           images: item.images || [],
           product_url: item.product_url,
-          variants: item.variants || [],
+          variants: (item.variants || []).map((v) => ({
+            ...v,
+            price: v.price != null && Number(v.price) > 0 ? Number(v.price) : price,
+          })),
         },
       });
 
@@ -678,7 +715,7 @@ $('login-form').addEventListener('submit', async (e) => {
 });
 
 $('btn-logout').addEventListener('click', async () => {
-  await chrome.storage.local.remove(['token', 'user']);
+  await chrome.storage.local.remove(['token', 'user', 'authCredentials', 'authExpired']);
   loadState();
 });
 

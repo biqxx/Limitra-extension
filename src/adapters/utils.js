@@ -67,6 +67,66 @@
     }
   }
 
+  function extractBalancedJson(text, keyPattern) {
+    if (!text) return null;
+    const match = text.match(keyPattern);
+    if (!match) return null;
+    const afterKey = match.index + match[0].length;
+    let start = -1;
+    let openChar = '';
+    let closeChar = '';
+    for (let i = afterKey; i < text.length; i += 1) {
+      const ch = text[i];
+      if (ch === '{' || ch === '[') {
+        start = i;
+        openChar = ch;
+        closeChar = ch === '{' ? '}' : ']';
+        break;
+      }
+      if (!/\s/.test(ch)) break;
+    }
+    if (start === -1) return null;
+
+    let depth = 0;
+    let inString = false;
+    let quoteChar = '';
+    let escaped = false;
+    for (let i = start; i < text.length; i += 1) {
+      const ch = text[i];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (inString) {
+        if (ch === quoteChar) inString = false;
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        inString = true;
+        quoteChar = ch;
+        continue;
+      }
+      if (ch === openChar) depth += 1;
+      else if (ch === closeChar) {
+        depth -= 1;
+        if (depth === 0) {
+          const raw = text.slice(start, i + 1);
+          const direct = parseJsonSafe(raw);
+          if (direct) return direct;
+          const normalized = raw
+            .replace(/([{,]\s*)'([^']+?)'\s*:/g, '$1"$2":')
+            .replace(/:\s*'([^']*?)'(\s*[,}\]])/g, ':"$1"$2');
+          return parseJsonSafe(normalized);
+        }
+      }
+    }
+    return null;
+  }
+
   function extractJsonLdProducts(doc) {
     const scripts = Array.from(doc.querySelectorAll('script[type="application/ld+json"]'));
     const products = [];
@@ -92,6 +152,7 @@
     parseWeightLb,
     uniqueStrings,
     parseJsonSafe,
+    extractBalancedJson,
     extractJsonLdProducts,
   };
 })();
