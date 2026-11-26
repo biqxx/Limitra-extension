@@ -329,6 +329,15 @@ function renderEditor(item) {
       const idx = reviewQueue.findIndex((i) => i.queue_id === item.queue_id);
       if (idx !== -1) {
         reviewQueue[idx].price = Number($('ed-price').value) || reviewQueue[idx].price;
+        if (Array.isArray(reviewQueue[idx].variants)) {
+          document.querySelectorAll('.var-price').forEach((inp) => {
+            const vIdx = Number(inp.dataset.idx);
+            const vPrice = Number(inp.value);
+            if (reviewQueue[idx].variants[vIdx] && Number.isFinite(vPrice) && vPrice > 0) {
+              reviewQueue[idx].variants[vIdx].price = vPrice;
+            }
+          });
+        }
         await chrome.storage.local.set({ reviewQueue });
       }
       const res = await chrome.runtime.sendMessage({ type: 'LIMITRA_RUN_REVIEW', queueId: item.queue_id });

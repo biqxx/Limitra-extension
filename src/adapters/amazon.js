@@ -100,6 +100,7 @@
     let dimensionValues = null;
     let asinVariationValues = null;
     let variationDisplayLabels = null;
+    let dimensionsOrder = null;
     let colorImages = null;
 
     for (const s of scripts) {
@@ -114,6 +115,15 @@
       }
       if (!variationDisplayLabels && text.includes('variationDisplayLabels')) {
         variationDisplayLabels = extractBalancedJson(text, /"variationDisplayLabels"\s*:/);
+      }
+      if (!dimensionsOrder && text.includes('"dimensions"')) {
+        const dm = text.match(/"dimensions"\s*:\s*(\[[^\]]*\])/);
+        if (dm) {
+          const parsedDims = parseJsonSafe(dm[1]);
+          if (Array.isArray(parsedDims) && parsedDims.length > 0) {
+            dimensionsOrder = parsedDims;
+          }
+        }
       }
       if (!colorImages && text.includes('colorImages')) {
         colorImages = extractBalancedJson(text, /['"]colorImages['"]\s*:/);
@@ -148,8 +158,13 @@
     });
 
     const variants = [];
-    const dimKeys = variationDisplayLabels ? Object.keys(variationDisplayLabels) : [];
-    const dimNames = dimKeys.map((k) => variationDisplayLabels[k] || k);
+    const dimKeys =
+      Array.isArray(dimensionsOrder) && dimensionsOrder.length > 0
+        ? dimensionsOrder
+        : variationDisplayLabels
+          ? Object.keys(variationDisplayLabels)
+          : [];
+    const dimNames = dimKeys.map((k) => variationDisplayLabels?.[k] || k);
     const activeAsin = currentAsin || extractAsin(doc.location?.href || '');
 
     if (dimensionValues && typeof dimensionValues === 'object') {
